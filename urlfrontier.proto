@@ -32,7 +32,8 @@ service URLFrontier {
      /** Delete an entire crawl, returns the number of URLs removed this way **/
      rpc DeleteCrawl(DeleteCrawlMessage) returns (Long) {}
 
-     /** Return a list of queues for a specific crawl. Can chose whether to include inactive queues (a queue is active if it has URLs due for fetching);
+     /** Return a list of queues for a specific crawl. Can choose whether to include inactive queues (a queue is active if it holds URLs which
+       have not been completed yet and is not blocked; whether they are due for fetching is not taken into account);
        by default the service will return up to 100 results from offset 0 and exclude inactive queues.**/
      rpc ListQueues(Pagination) returns (QueueList) {}
 
@@ -41,6 +42,13 @@ service URLFrontier {
 
      /** Push URL items to the server; they get created (if they don't already exist) in case of DiscoveredURLItems or updated if KnownURLItems **/
      rpc PutURLs(stream URLItem) returns (stream AckMessage) {}
+
+     /** Push batches of discovered URLs to the server; a URL gets created unless it is already known, in which case it is ignored.
+      The outlinks of a page form a natural batch. Sending them in one message rather than one each amortises the per-message cost,
+      which is what limits the ingestion rate: use this for the discovered URLs, which are the bulk of what a crawl writes, and
+      PutURLs for the updates of URLs which have been fetched. Each batch is acked as a whole, with one status per URL in the same
+      order as the batch. **/
+     rpc PutDiscovered(stream DiscoveredBatch) returns (stream BatchAck) {}
 
      /** Return stats for a specific queue or an entire crawl. Does not aggregate the stats across different crawlids. **/
      rpc GetStats(QueueWithinCrawlParams) returns (Stats) {}
@@ -54,10 +62,12 @@ service URLFrontier {
       **/
      rpc BlockQueueUntil(BlockQueueParams) returns (Empty) {}
           
-     /** De/activate the crawl. GetURLs will not return anything until SetActive is set to true. PutURLs will still take incoming data. **/
+     /** De/activate the frontier. GetURLs will not return anything until SetActive is set to true. PutURLs will still take incoming data.
+      The state belongs to the frontier node, not to a specific crawl; with local set to false the change is applied to every node in the cluster. **/
      rpc SetActive(Active) returns (Empty) {}
 
-     /** Returns true if the crawl is active, false if it has been deactivated with SetActive(Boolean) **/
+     /** Returns true if the frontier is active, false if it has been deactivated with SetActive.
+      With local set to false, returns true only if every node in the cluster is active. **/
      rpc GetActive(Local) returns (Boolean) {}
      
      /** Set a delay from a given queue.
@@ -69,6 +79,27 @@ service URLFrontier {
           
      /** Overrides the log level for a given package **/
      rpc SetLogLevel(LogLevelParams) returns (Empty) {}
+
+     /** Sets crawl limit for domain **/
+     rpc SetCrawlLimit(CrawlLimitParams) returns (Empty) {}
+
+     /** Get status of a particular URL 
+         This does not take into account URL scheduling.
+         Used to check current status of an URL within the frontier
+     **/
+     rpc GetURLStatus(URLStatusRequest) returns (URLItem) {}
+     
+     /** List all URLs currently in the frontier 
+         This does not take into account URL scheduling.
+         Used to check current status of all URLs within the frontier
+     **/
+     rpc ListURLs(ListUrlParams) returns (stream URLItem) {}
+     
+     /** Count URLs currently in the frontier **/
+     rpc CountURLs(CountUrlParams) returns (Long) {}
+     
+     /** Deletes URLs from a frontier which are older than N days **/
+     rpc PurgeURLs(PurgeUrlParams) returns (Long) {}
 }
 
 /** 
@@ -79,16 +110,21 @@ message Stats {
   uint64 size = 1;
   // number of URLs currently in flight
   uint32 inProcess = 2;
-  // custom counts 
+  // custom counts; the reference implementation populates 'completed' (URLs which
+  // will not be fetched again) and 'active_queues' (queues holding active or in
+  // flight URLs)
   map<string, uint64> counts = 3;
-  // number of active queues in the frontier
+  // number of queues in the crawl, whether they are active or not
   uint64 numberOfQueues = 4;
   // crawl ID
   string crawlID = 5;
 }
 
 message Pagination {
-  // position of the first result in the list; defaults to 0
+  // position of the first result among the queues matching this request, i.e. the
+  // ones a call with start = 0 would return; defaults to 0. The offsets are only
+  // reliable if the frontier is not serving GetURLs at the same time, as the set of
+  // matching queues changes underneath the pagination
   uint32 start = 1;
   // max number of values; defaults to 100
   uint32 size = 2;
@@ -128,9 +164,10 @@ message Long {
 /** Returned by ListQueues **/
 message QueueList {
   repeated string values = 1;
-  // total number of queues
+  // total number of queues; not set by the reference implementation, as counting
+  // them would mean scanning every queue of the frontier
   uint64 total = 2;
-  // position of the first result in the list
+  // position of the first result in the list, echoed from the request
   uint32 start = 3;
   // number of values returned
   uint32 size = 4;
@@ -185,7 +222,9 @@ message GetParams {
   uint32 max_queues = 2;
   // queue id if restricting to a specific queue
   string key = 3;
-  //  delay in seconds before a URL can be unlocked and sent again for fetching 
+  //  delay in seconds before a URL can be unlocked and sent again for fetching;
+  //  unlike the fields above, the default value of 0 does not mean 'no limit' but
+  //  lets the service pick a value - 30 seconds in the reference implementation
   uint32 delay_requestable = 4;
   oneof item {
     AnyCrawlID anyCrawlID = 5;
@@ -203,6 +242,14 @@ oneof item {
   }
   /** Identifier specified by the client, if missing, the URL is returned **/
   string ID = 3;
+  /** Creation date of the URLInfo
+  Expressed in seconds of UTC time since Unix epoch 1970-01-01T00:00:00Z.
+  Set by the service when the URL is first stored and returned by GetURLStatus and
+  ListURLs; the value sent by a client on PutURLs is ignored. This is what PurgeURLs
+  compares its cutoff against, so a URL re-imported into another frontier is dated
+  from the import, not from its original discovery.
+  **/
+  uint64 creation_date = 4;
 }
 
 message AckMessage {
@@ -242,7 +289,7 @@ message URLInfo {
 /**
  URL which was already known in the frontier, was returned by GetURLs() and processed by the crawler. Used for updating the information 
  about it in the frontier. If the date is not set, the URL will be considered done and won't be resubmitted for fetching, otherwise
- it will be elligible for fetching after the delay has elapsed.
+ it will be eligible for fetching after the delay has elapsed.
 **/
 message KnownURLItem {
   URLInfo info = 1;
@@ -261,6 +308,24 @@ message DiscoveredURLItem {
 }
 
 /**
+ A batch of URLs discovered during the crawl, typically the outlinks of one page.
+ Each of them might already be known in the URL Frontier or not.
+**/
+message DiscoveredBatch {
+  /** Identifier specified by the client, echoed in the BatchAck **/
+  string ID = 1;
+  repeated URLInfo items = 2;
+}
+
+/** Acknowledges a whole DiscoveredBatch **/
+message BatchAck {
+  /** ID which had been specified by the client **/
+  string ID = 1;
+  /** one status per URL of the batch, in the order they were sent **/
+  repeated AckMessage.Status statuses = 2;
+}
+
+/**
  Configuration of the log level for a particular package, e.g.
  crawlercommons.urlfrontier.service.rocksdb DEBUG
 **/
@@ -276,5 +341,65 @@ message LogLevelParams {
   Level level = 2;
   // only for this instance
   bool local = 3;
+}
+
+
+/** Parameter message for SetCrawlLimit **/
+message CrawlLimitParams {
+  /** ID for the queue **/
+  string key = 1;
+  uint32 limit = 2;
+  // crawl ID
+  string crawlID = 3;
+  // only for this instance
+  bool local = 4;
+}
+
+message URLStatusRequest {
+    /** URL for which we request info */
+    string url = 1;
+    /** ID for the queue **/
+    string key = 2;
+    // crawl ID - empty string for default
+    string crawlID = 3;
+}
+
+message ListUrlParams {
+  // position of the first result in the list; defaults to 0
+  uint32 start = 1;
+  // max number of values; defaults to 100
+  uint32 size = 2;
+  /** ID for the queue **/
+  string key = 3;
+  // crawl ID
+  string crawlID = 4;
+  // only for the current local instance
+  bool local = 5;
+  // Search filter on url (can be empty, default is empty)
+  optional string filter = 6;
+  // Ignore Case sensitivity for search filter (default is false -> case sensitive)
+  optional bool ignoreCase = 7;
+}
+
+message CountUrlParams {
+  /** ID for the queue **/
+  string key = 1;
+  // crawl ID
+  string crawlID = 2;
+  // Search filter on url (can be empty, default is empty)
+  optional string filter = 3;
+  // Ignore Case sensitivity for search filter (default is false -> case sensitive)
+  optional bool ignoreCase = 4;
+  // only for the current local instance (default is false)
+  optional bool local = 5;
+}
+
+message PurgeUrlParams {
+  /** ID for the queue **/
+  string key = 1;
+  // crawl ID
+  string crawlID = 2;
+  // Nb of days
+  uint32 days = 3;
 }
 
