@@ -5,6 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "uf"
+path = "src/main.rs"
+
 [build-dependencies]
 # protobuf->Rust compiler
 tonic-build = "0.8.3"
