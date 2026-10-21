@@ -12,6 +12,12 @@ It is built from the API definition of URL Frontier 2.6 (`urlfrontier.proto`).
 
 ## Installation
 
+Each [release](https://github.com/DigitalPebble/urlfrontier-client/releases) comes with prebuilt binaries for
+Linux (x86_64, arm64), macOS (x86_64, arm64) and Windows (x86_64), each with a SHA-256 checksum. Extract
+`uf` from the archive for your platform and put it on your `PATH`.
+
+### From source
+
 You need a [Rust toolchain](https://rustup.rs/) and `protoc`, the Protocol Buffers compiler, version 3.15 or
 later, which generates the gRPC code at build time:
 
@@ -148,6 +154,12 @@ first and exported in parallel on that many connections.
 
 The dump only covers the node `uf` is connected to: in a cluster, dump every node and concatenate the files.
 Pause the Frontier and stop sending URLs to it first if the dump must be complete.
+
+## Releasing
+
+Set the new version in `Cargo.toml`, commit, then push a tag with the same version, e.g.
+`git tag 0.2.0 && git push origin 0.2.0`. The release workflow creates the GitHub release with notes generated
+from the merged pull requests and attaches the binaries to it.
 
 ## License
 
