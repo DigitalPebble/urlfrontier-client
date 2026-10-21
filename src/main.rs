@@ -13,7 +13,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use chrono::{Local as LocalTime, TimeZone};
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use frontier::log_level_params::Level;
 use frontier::url_frontier_client::UrlFrontierClient;
 use frontier::{
@@ -355,11 +356,26 @@ enum Action {
         #[arg(short, long, default_value_t = 1)]
         threads: usize,
     },
+
+    /// Prints the shell completion script for uf
+    #[command(long_about = "Prints the shell completion script for uf, which completes \
+        the commands, options and the values they accept.\n\n\
+        e.g. for bash: uf completions bash > ~/.local/share/bash-completion/completions/uf")]
+    Completions {
+        /// Shell to complete for
+        shell: Shell,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    // the only command which does not need the Frontier
+    if let Action::Completions { shell } = args.action {
+        generate(shell, &mut Args::command(), "uf", &mut std::io::stdout());
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let address = format!("http://{}:{}", args.host, args.port);
 
@@ -660,6 +676,8 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 return Ok(ExitCode::FAILURE);
             }
         }
+
+        Action::Completions { .. } => unreachable!("handled before connecting"),
     }
 
     Ok(ExitCode::SUCCESS)

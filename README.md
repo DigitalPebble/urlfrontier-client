@@ -31,6 +31,20 @@ cargo install --path .
 This builds the `uf` binary and copies it to `~/.cargo/bin`, which `rustup` puts on your `PATH`. Run the same
 command again to update it, and `cargo uninstall urlfrontier-client` to remove it.
 
+### Shell completion
+
+`uf completions <SHELL>` prints a script which completes the commands, their options and the values these
+accept, for `bash`, `zsh`, `fish`, `elvish` or `powershell`. For bash:
+
+```
+mkdir -p ~/.local/share/bash-completion/completions
+uf completions bash > ~/.local/share/bash-completion/completions/uf
+```
+
+For zsh, write it as `_uf` in a directory of your `$fpath`; for fish, as `~/.config/fish/completions/uf.fish`.
+Generate it again after updating `uf`, as commands and options may have changed. The script takes effect in
+new shells.
+
 ## Usage
 
 ```
@@ -64,6 +78,7 @@ node `uf` is connected to is concerned.
 | `delete-queue` | Deletes a queue and its URLs |
 | `delete-crawl` | Deletes a crawl and its URLs |
 | `purge-urls` | Deletes the URLs stored more than a number of days ago (`-d`) |
+| `completions` | Shell completion script, see [Shell completion](#shell-completion) |
 
 ### Examples
 
