@@ -68,7 +68,7 @@ node `uf` is connected to is concerned.
 
 | Command | What it does |
 |---|---|
-| `get-stats` | Number of URLs, URLs in process, queues and the custom counts of the Frontier, for a crawl or one queue (`-k`) |
+| `get-stats` | Total, active and completed URLs and queues, URLs in process and custom counts, for a crawl or one queue (`-k`); output as JSON with `-j` |
 | `list-nodes` | Nodes forming the cluster |
 | `list-crawls` | Crawls in the Frontier |
 | `list-queues` | Queues of a crawl, active ones only unless `-i`; a page at a time (`-n`, `-s`), or all of them into a file with `-o` |
@@ -103,6 +103,12 @@ uf count-urls -f sitemap -i
 uf set-active false
 uf set-active
 ```
+
+With `get-stats -j`, each crawl ID contains `queues` and `urls` sections. The
+`completed` queue count is the total number of queues minus active queues.
+`other_counts` contains any Frontier-provided custom counts not already shown
+explicitly in those sections, so implementation-specific counts remain
+available.
 
 ## Injecting URLs
 
