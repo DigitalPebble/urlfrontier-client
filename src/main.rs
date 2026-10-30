@@ -141,6 +141,10 @@ enum Action {
         /// Restricts the scope to this frontier instance instead of aggregating over the cluster
         #[arg(short, long)]
         local: bool,
+
+        /// Outputs the stats as JSON
+        #[arg(short, long)]
+        json: bool,
     },
 
     /// Sends URLs from a file into the Frontier
@@ -358,9 +362,11 @@ enum Action {
     },
 
     /// Prints the shell completion script for uf
-    #[command(long_about = "Prints the shell completion script for uf, which completes \
+    #[command(
+        long_about = "Prints the shell completion script for uf, which completes \
         the commands, options and the values they accept.\n\n\
-        e.g. for bash: uf completions bash > ~/.local/share/bash-completion/completions/uf")]
+        e.g. for bash: uf completions bash > ~/.local/share/bash-completion/completions/uf"
+    )]
     Completions {
         /// Shell to complete for
         shell: Shell,
@@ -481,6 +487,7 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
             key,
             crawl_id,
             local,
+            json,
         } => {
             let response = client
                 .get_stats(Request::new(QueueWithinCrawlParams {
@@ -490,12 +497,54 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }))
                 .await?;
             let stats = response.into_inner();
-            println!("crawl ID:        {}", stats.crawl_id);
-            println!("URLs:            {}", stats.size);
-            println!("in process:      {}", stats.in_process);
-            println!("queues:          {}", stats.number_of_queues);
+            let completed_urls = stats.counts.get("completed").copied().unwrap_or_default();
+            let active_queues = stats
+                .counts
+                .get("active_queues")
+                .copied()
+                .unwrap_or_default();
+            let completed_queues = stats.number_of_queues.saturating_sub(active_queues);
+            if json {
+                let other_counts: std::collections::BTreeMap<_, _> = stats
+                    .counts
+                    .iter()
+                    .filter(|(name, _)| {
+                        name.as_str() != "completed" && name.as_str() != "active_queues"
+                    })
+                    .map(|(name, value)| (name.clone(), value))
+                    .collect();
+                let output = serde_json::json!({
+                    stats.crawl_id: {
+                        "queues": {
+                            "total": stats.number_of_queues,
+                            "active": active_queues,
+                            "completed": completed_queues,
+                        },
+                        "urls": {
+                            "total": stats.size + completed_urls,
+                            "active": stats.size,
+                            "completed": completed_urls,
+                            "in_process": stats.in_process,
+                        },
+                        "other_counts": other_counts,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+                return Ok(ExitCode::SUCCESS);
+            }
+            println!("crawl_ID:        {}", stats.crawl_id);
+            println!("urls_total:            {}", stats.size + completed_urls);
+            println!("urls_active:          {}", stats.size);
+            println!("urls_completed:       {}", completed_urls);
+            println!("urls_in_process:      {}", stats.in_process);
+            println!("queues_total:          {}", stats.number_of_queues);
+            println!("queues_active:   {}", active_queues);
+            println!("queues_completed: {}", completed_queues);
             // sort the custom counts so that the output is stable
             let mut counts: Vec<_> = stats.counts.iter().collect();
+            counts.retain(|(name, _)| {
+                name.as_str() != "completed" && name.as_str() != "active_queues"
+            });
             counts.sort();
             for (name, value) in counts {
                 println!("{:<16} {}", format!("{}:", name), value);
