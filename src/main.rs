@@ -3,6 +3,7 @@ pub mod frontier {
     include!(concat!(env!("OUT_DIR"), "/urlfrontier.serde.rs"));
 }
 
+mod connection;
 mod dump_urls;
 mod put_urls;
 
@@ -40,6 +41,9 @@ struct Args {
     /// Port of the URLFrontier service to connect to
     #[arg(short, long, default_value_t = 7071)]
     port: usize,
+
+    #[command(flatten)]
+    tls: connection::TlsArgs,
 
     #[command(subcommand)]
     action: Action,
@@ -383,9 +387,15 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let address = format!("http://{}:{}", args.host, args.port);
+    let endpoint = match connection::endpoint(&args.host, args.port, &args.tls) {
+        Ok(endpoint) => endpoint,
+        Err(e) => {
+            eprintln!("{}", e);
+            return Ok(ExitCode::FAILURE);
+        }
+    };
 
-    let mut client = UrlFrontierClient::connect(address.clone()).await?;
+    let mut client = connection::connect(&endpoint).await?;
 
     match args.action {
         Action::ListNodes => {
@@ -558,7 +568,7 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
             in_flight,
             batch,
         } => {
-            let ok = put_urls::run(address, file, crawl_id, threads, in_flight, batch).await;
+            let ok = put_urls::run(endpoint, file, crawl_id, threads, in_flight, batch).await;
             if !ok {
                 return Ok(ExitCode::FAILURE);
             }
@@ -720,7 +730,7 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
             crawl_id,
             threads,
         } => {
-            let ok = dump_urls::run(client, address, output, crawl_id, threads).await;
+            let ok = dump_urls::run(client, endpoint, output, crawl_id, threads).await;
             if !ok {
                 return Ok(ExitCode::FAILURE);
             }
