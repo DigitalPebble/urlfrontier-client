@@ -14,6 +14,9 @@ use flate2::Compression;
 use tonic::Request;
 
 use crate::frontier::{ListUrlParams, Local, Pagination, UrlItem};
+use tonic::transport::Endpoint;
+
+use crate::connection::connect;
 use crate::Client;
 
 /// how many URLs between progress messages
@@ -31,7 +34,7 @@ type DumpResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 /// output; returns false if the dump is incomplete
 pub async fn run(
     mut client: Client,
-    address: String,
+    endpoint: Endpoint,
     output: Option<PathBuf>,
     crawl_id: Option<String>,
     threads: usize,
@@ -70,7 +73,7 @@ pub async fn run(
 
     let start = Instant::now();
     let mut success = if threads > 1 {
-        dump_parallel(client, address, crawl_ids, threads, dump.clone()).await
+        dump_parallel(client, endpoint, crawl_ids, threads, dump.clone()).await
     } else {
         dump_sequential(client, crawl_ids, &dump).await
     };
@@ -118,7 +121,7 @@ async fn dump_sequential(mut client: Client, crawl_ids: Vec<String>, dump: &Dump
 /// sharing the list; returns false if any of them failed
 async fn dump_parallel(
     mut client: Client,
-    address: String,
+    endpoint: Endpoint,
     crawl_ids: Vec<String>,
     threads: usize,
     dump: Arc<Dump>,
@@ -142,13 +145,13 @@ async fn dump_parallel(
 
     let workers: Vec<_> = (0..threads)
         .map(|_| {
-            let address = address.clone();
+            let endpoint = endpoint.clone();
             let work = work.clone();
             let failed = failed.clone();
             let dump = dump.clone();
             tokio::spawn(async move {
                 let result = async {
-                    let mut client = Client::connect(address).await?;
+                    let mut client = connect(&endpoint).await?;
                     while !failed.load(Ordering::Relaxed) {
                         let Some((crawl_id, key)) = work.lock().unwrap().pop_front() else {
                             break;

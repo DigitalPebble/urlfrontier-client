@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 use flate2::read::MultiGzDecoder;
 use tokio::sync::{mpsc, Mutex, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::Endpoint;
 
+use crate::connection::connect;
 use crate::frontier::ack_message::Status;
 use crate::frontier::{url_item, DiscoveredBatch, DiscoveredUrlItem, UrlInfo, UrlItem};
-use crate::Client;
 
 /// how often the intermediate throughput is displayed
 const REPORT_INTERVAL: Duration = Duration::from_secs(30);
@@ -61,7 +62,7 @@ struct Chunk {
 /// Sends the URLs of `file` to the Frontier on `threads` streams; returns false if the input
 /// could not be read or a stream failed
 pub async fn run(
-    address: String,
+    endpoint: Endpoint,
     file: PathBuf,
     crawl_id: String,
     threads: usize,
@@ -74,7 +75,7 @@ pub async fn run(
     let window = in_flight.max(1);
 
     let mut batch = batch;
-    if batch > 0 && !supports_put_discovered(&address).await {
+    if batch > 0 && !supports_put_discovered(&endpoint).await {
         eprintln!("Server does not support PutDiscovered - sending the URLs individually");
         batch = 0;
     }
@@ -103,7 +104,7 @@ pub async fn run(
     let senders: Vec<_> = (0..streams)
         .map(|_| {
             tokio::spawn(send_from(
-                address.clone(),
+                endpoint.clone(),
                 chunks.clone(),
                 crawl_id.clone(),
                 window,
@@ -226,9 +227,9 @@ async fn report(counters: Arc<Counters>) {
 
 /// Probes the server with an empty batch: an old server answers the call itself with
 /// UNIMPLEMENTED, a current one acks it
-async fn supports_put_discovered(address: &str) -> bool {
+async fn supports_put_discovered(endpoint: &Endpoint) -> bool {
     let probe = async {
-        let mut client = Client::connect(address.to_string()).await.ok()?;
+        let mut client = connect(endpoint).await.ok()?;
         let batch = DiscoveredBatch {
             id: "probe".to_string(),
             items: Vec::new(),
@@ -249,14 +250,14 @@ async fn supports_put_discovered(address: &str) -> bool {
 /// Sends URLs taken from the shared chunks on a connection of its own until they are
 /// exhausted, then waits for the Frontier to confirm every one of them
 async fn send_from(
-    address: String,
+    endpoint: Endpoint,
     chunks: Arc<Mutex<mpsc::Receiver<Chunk>>>,
     crawl_id: String,
     window: usize,
     batch: usize,
     counters: Arc<Counters>,
 ) {
-    let client = match Client::connect(address).await {
+    let client = match connect(&endpoint).await {
         Ok(client) => client,
         Err(e) => {
             counters.stream_error.store(true, Ordering::Relaxed);

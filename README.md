@@ -54,11 +54,11 @@ new shells.
 ## Usage
 
 ```
-uf [--host HOST] [-p PORT] <COMMAND> [OPTIONS]
+uf [--host HOST] [-p PORT] [--tls ...] <COMMAND> [OPTIONS]
 ```
 
-The Frontier is reached on `localhost:7071` unless `--host` or `-p` say otherwise; these two options go
-before the command. `uf --help` lists the commands and `uf <COMMAND> --help` describes their options.
+The Frontier is reached on `localhost:7071` unless `--host` or `-p` say otherwise. These options, like the
+TLS ones described in [TLS](#tls), go before the command. `uf --help` lists the commands and `uf <COMMAND> --help` describes their options.
 
 Most commands apply to the crawl `DEFAULT` unless one is given with `-c` / `--crawl-id`. In a cluster, the
 commands which support `-l` / `--local` aggregate over every node unless it is set, in which case only the
@@ -109,6 +109,32 @@ With `get-stats -j`, each crawl ID contains `queues` and `urls` sections. The
 `other_counts` contains any Frontier-provided custom counts not already shown
 explicitly in those sections, so implementation-specific counts remain
 available.
+
+## TLS
+
+`uf` connects in plaintext unless it is given `--tls` or one of the other `--tls-*` options, which turn
+TLS on. They have the same names as in the Java client of URL Frontier and are used with a Frontier which
+has TLS enabled (`server.tls.*` in its configuration, from URL Frontier 2.7) or which sits behind a TLS
+terminating proxy.
+
+| Option | What it does |
+|---|---|
+| `--tls` | Connects over TLS, checking the server certificate against the certificates trusted by the system |
+| `--tls-trust-cert PEM` | Also trusts the certificates in this file, e.g. the CA which signed the certificate of the Frontier |
+| `--tls-cert PEM` and `--tls-key PEM` | Client certificate chain and its private key, for mutual TLS; one requires the other |
+| `--tls-server-name NAME` | Name to check the server certificate against, when it differs from `--host` |
+
+```
+# mutual TLS, with a private CA
+uf --host frontier.internal --tls-trust-cert ca.pem --tls-cert crawler.pem --tls-key crawler-key.pem get-stats
+```
+
+The server certificate must be valid for the host name given with `--host`, or with `--tls-server-name`:
+certificates issued for an IP address are not supported, so connecting with `--host 10.0.0.5` needs
+`--tls-server-name` with a name of the certificate. The private key is a PEM file in PKCS#8 or PKCS#1
+(RSA) format and cannot be encrypted, unlike with the Java client which takes a `--tls-key-password`;
+decrypt it first with `openssl pkey -in key.pem -out key-plain.pem`. A file which cannot be read or holds
+no certificate stops `uf` before it connects.
 
 ## Injecting URLs
 
